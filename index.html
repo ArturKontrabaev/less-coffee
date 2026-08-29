@@ -66,6 +66,18 @@
     background:var(--accent); color:#fff; padding:12px 18px; border-radius:14px; font-weight:700; font-size:14px;
     opacity:0; transition:.3s; pointer-events:none; z-index:9; box-shadow:0 8px 22px color-mix(in srgb,var(--accent) 35%, transparent); }
   #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .actions{ display:flex; gap:16px; justify-content:center; margin-top:14px; }
+  .actions .reset{ margin:0; }
+  .modal{ position:fixed; inset:0; background:rgba(20,18,40,.55); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); display:flex; align-items:flex-end; justify-content:center; z-index:20; }
+  .modal.hidden{ display:none; }
+  .sheet{ background:var(--bg); width:100%; max-width:520px; border-radius:22px 22px 0 0; padding:20px 18px calc(24px + env(safe-area-inset-bottom)); box-shadow:0 -8px 30px rgba(0,0,0,.25); }
+  .sheet h3{ margin:2px 0 6px; font-size:17px; }
+  .sheet .mp{ color:var(--muted); font-size:13px; margin:0 0 8px; line-height:1.45; }
+  .sheet label{ display:block; font-size:12px; color:var(--muted); margin:12px 2px 5px; font-weight:600; }
+  .sheet textarea{ width:100%; height:64px; resize:none; background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:10px; font-size:12px; color:var(--text); font-family:ui-monospace,Menlo,monospace; }
+  .mbtn{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; font-weight:700; margin-top:8px; cursor:pointer; background:var(--accent); color:#fff; }
+  .mbtn.good{ background:var(--good); }
+  .mbtn.ghost{ background:none; color:var(--muted); border:1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -98,11 +110,28 @@
 
   <div id="boughtBox" class="bought"></div>
 
-  <button class="reset" id="resetBtn">↺ Сбросить прогресс</button>
+  <div class="actions">
+    <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
+    <button class="reset" id="resetBtn">↺ Сбросить прогресс</button>
+  </div>
 
   <div class="foot">
     Данные хранятся только на этом устройстве. Цены в целях — примерные, поправь под свои.<br>
     Экономия +500 за чашку · дальше ужесточим до «за день без кофе».
+  </div>
+
+  <div id="backupModal" class="modal hidden">
+    <div class="sheet">
+      <h3>💾 Бэкап копилки</h3>
+      <p class="mp">Скопируй код и сохрани себе (в Заметки или отправь в Telegram). Чтобы восстановить на новом телефоне или после чистки кэша — вставь код ниже и нажми «Восстановить».</p>
+      <label>Код копилки (экспорт)</label>
+      <textarea id="expCode" readonly onclick="this.select()"></textarea>
+      <button class="mbtn" id="copyCode">📋 Скопировать код</button>
+      <label>Восстановить из кода (импорт)</label>
+      <textarea id="impCode" placeholder="Вставь сюда код бэкапа"></textarea>
+      <button class="mbtn good" id="doImport">↺ Восстановить</button>
+      <button class="mbtn ghost" id="closeBackup">Закрыть</button>
+    </div>
   </div>
 
   <div id="toast"></div>
@@ -223,6 +252,25 @@
     if(del){
       S.goals=S.goals.filter(x=>String(x.id)!==del); save(); render();
     }
+  });
+  // --- бэкап (экспорт/импорт) ---
+  function encodeState(){ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
+  function decodeState(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
+  $('#backupBtn').addEventListener('click', ()=>{ $('#expCode').value = encodeState(); $('#impCode').value=''; $('#backupModal').classList.remove('hidden'); });
+  $('#closeBackup').addEventListener('click', ()=> $('#backupModal').classList.add('hidden'));
+  $('#backupModal').addEventListener('click', e=>{ if(e.target.id==='backupModal') $('#backupModal').classList.add('hidden'); });
+  $('#copyCode').addEventListener('click', ()=>{
+    const code=$('#expCode').value;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(code).then(()=>toast('код скопирован ✓')).catch(()=>{ $('#expCode').select(); toast('код выделен — скопируй'); });
+    } else { $('#expCode').select(); try{ document.execCommand('copy'); toast('код скопирован ✓'); }catch(e){ toast('выдели и скопируй вручную'); } }
+  });
+  $('#doImport').addEventListener('click', ()=>{
+    const raw=$('#impCode').value.trim(); if(!raw){ toast('вставь код'); return; }
+    let data; try{ data=decodeState(raw); }catch(e){ toast('код не читается — проверь'); return; }
+    if(!data || typeof data!=='object' || !('pot' in data) || !Array.isArray(data.goals)){ toast('это не похоже на код копилки'); return; }
+    if(!confirm('Восстановить копилку из кода? Текущие данные на этом устройстве заменятся.')) return;
+    S = Object.assign({}, DEF, data); save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
   });
   render();
 })();
