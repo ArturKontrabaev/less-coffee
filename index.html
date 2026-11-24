@@ -38,8 +38,11 @@
   .goal.focus{ border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%, transparent); }
   .goal.reached{ border-color:var(--good); background:linear-gradient(160deg,color-mix(in srgb,var(--good) 12%, var(--card)),var(--card)); }
   .goal .top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
-  .goal .name{ font-weight:700; font-size:15px; }
+  .goal .name{ font-weight:700; font-size:15px; line-height:1.35; }
   .goal .price{ color:var(--muted); font-size:13px; white-space:nowrap; }
+  .goal .src{ display:inline-block; margin-left:6px; font-size:10px; font-weight:700; letter-spacing:.2px; line-height:1.2; color:var(--muted); background:var(--card2); border:1px solid var(--line); border-radius:999px; padding:2px 7px; vertical-align:middle; text-decoration:none; position:relative; top:-1px; }
+  .goal .src.wishkov{ color:var(--accent); background:color-mix(in srgb,var(--accent) 10%, var(--card)); border-color:color-mix(in srgb,var(--accent) 22%, var(--line)); }
+  .wishkov-hint{ margin-left:auto; font-size:11px; color:var(--muted); }
   .bar{ height:12px; background:var(--barbg); border-radius:7px; margin:10px 0 6px; overflow:hidden; }
   .bar > i{ display:block; height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); border-radius:7px; transition:width .5s cubic-bezier(.2,.8,.2,1); box-shadow:0 0 10px color-mix(in srgb,var(--accent) 45%, transparent); }
   .goal.reached .bar > i{ background:linear-gradient(90deg,var(--good2),var(--good)); box-shadow:0 0 10px color-mix(in srgb,var(--good) 50%, transparent); }
@@ -123,6 +126,7 @@
 
   <div id="boughtBox" class="bought"></div>
   <div id="wishkovStatus" class="wishkov-status hidden">вишлист не обновился</div>
+  <div id="storageStatus" class="wishkov-status hidden">не удалось прочитать копилку — данные на устройстве не трогаем</div>
 
   <div class="actions">
     <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
@@ -168,6 +172,7 @@
     boughtWishkovIds: [],
     migratedWishkovOnly: false
   };
+  let storageLocked = false;
   let S = load();
 
   function isWishkovGoal(g){
@@ -181,19 +186,36 @@
     return true;
   }
   function load(){
+    let raw;
+    try{ raw = localStorage.getItem(KEY); }
+    catch(e){ storageLocked = true; return structuredClone(DEF); }
+    if(raw == null || raw === '') return structuredClone(DEF);
+    let r;
+    try{ r = JSON.parse(raw); }
+    catch(e){ storageLocked = true; return structuredClone(DEF); }
+    if(!r || typeof r !== 'object' || Array.isArray(r)){ storageLocked = true; return structuredClone(DEF); }
     try{
-      const r = JSON.parse(localStorage.getItem(KEY));
-      const state = r ? Object.assign({}, structuredClone(DEF), r) : structuredClone(DEF);
+      const state = Object.assign({}, structuredClone(DEF), r);
       if(!Array.isArray(state.boughtWishkovIds)) state.boughtWishkovIds = [];
       if(!Array.isArray(state.goals)) state.goals = [];
       if(!Array.isArray(state.bought)) state.bought = [];
       const migrated = migrateWishkovOnly(state);
       // pot, bought, log, cups не трогаем — только цели без wishkov-id, и только один раз
-      if(r && migrated) localStorage.setItem(KEY, JSON.stringify(state));
+      if(migrated){
+        try{ localStorage.setItem(KEY, JSON.stringify(state)); }
+        catch(e){ /* в памяти уже мигрировано; диск не затираем дефолтом */ }
+      }
       return state;
-    }catch(e){ return structuredClone(DEF); }
+    }catch(e){
+      storageLocked = true;
+      return structuredClone(DEF);
+    }
   }
-  function save(){ localStorage.setItem(KEY, JSON.stringify(S)); }
+  function save(){
+    if(storageLocked) return;
+    try{ localStorage.setItem(KEY, JSON.stringify(S)); }
+    catch(e){}
+  }
   function today(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function fmt(n){ return n.toLocaleString('ru-RU'); }
   const $ = s => document.querySelector(s);
@@ -220,9 +242,15 @@
       const el = document.createElement('div');
       el.className = 'goal' + (reached ? ' reached' : (g.id===focusId ? ' focus' : ''));
       el.setAttribute('data-id', g.id);
-      const isEditing = editMode && String(editingId)===String(g.id);
+      const fromWishkov = isWishkovGoal(g);
+      const isEditing = editMode && !fromWishkov && String(editingId)===String(g.id);
+      const badge = fromWishkov
+        ? (g.url
+            ? '<a class="src wishkov" href="'+esc(g.url)+'" target="_blank" rel="noopener noreferrer">wishkov</a>'
+            : '<span class="src wishkov">wishkov</span>')
+        : '<span class="src own">своё</span>';
       let html =
-        '<div class="top"><span class="name">'+esc(g.name)+'</span><span class="price">'+fmt(g.price)+' ₽</span></div>'+
+        '<div class="top"><span class="name">'+esc(g.name)+' '+badge+'</span><span class="price">'+fmt(g.price)+' ₽</span></div>'+
         '<div class="bar"><i style="width:'+pct+'%"></i></div>'+
         '<div class="meta">'+
           '<span class="pct">'+(reached?'<span class="tag">✓ можно покупать</span>':(g.id===focusId?'<span class="tag">ближайшая</span> ':'')+'осталось '+fmt(left)+' ₽ · '+pct+'%')+'</span>'+
@@ -241,7 +269,10 @@
             '</div>'+
           '</div>';
       } else if(editMode){
-        html += '<div class="edit-row"><button class="mv" data-up="'+g.id+'"'+(idx===0?' disabled':'')+'>↑</button><button class="mv" data-down="'+g.id+'"'+(idx===goals.length-1?' disabled':'')+'>↓</button><button type="button" class="edit-start" data-edit="'+g.id+'">изменить</button><button class="del" data-del="'+g.id+'">удалить</button></div>';
+        const movers = '<button class="mv" data-up="'+g.id+'"'+(idx===0?' disabled':'')+'>↑</button><button class="mv" data-down="'+g.id+'"'+(idx===goals.length-1?' disabled':'')+'>↓</button>';
+        html += fromWishkov
+          ? '<div class="edit-row">'+movers+'<span class="wishkov-hint">удаляй в wishkov</span></div>'
+          : '<div class="edit-row">'+movers+'<button type="button" class="edit-start" data-edit="'+g.id+'">изменить</button><button class="del" data-del="'+g.id+'">удалить</button></div>';
       }
       el.innerHTML = html;
       box.appendChild(el);
@@ -257,6 +288,8 @@
 
     $('#addBox').classList.toggle('hidden', !editMode);
     $('#editBtn').textContent = editMode ? 'Готово' : 'Править';
+    const st = $('#storageStatus');
+    if(st) st.classList.toggle('hidden', !storageLocked);
   }
   function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
   function moveGoal(id, dir){ const i=S.goals.findIndex(x=>String(x.id)===String(id)); if(i<0)return; const j=i+dir; if(j<0||j>=S.goals.length)return; const t=S.goals[i]; S.goals[i]=S.goals[j]; S.goals[j]=t; save(); render(); }
@@ -300,7 +333,7 @@
     const name=nameEl?nameEl.value.trim():'';
     const price=parseInt((priceEl?priceEl.value:'').replace(/\D/g,''),10);
     if(!name || !(price>0)){ toast('впиши название и цену больше 0'); return false; }
-    const g=S.goals.find(x=>String(x.id)===String(id)); if(!g) return false;
+    const g=S.goals.find(x=>String(x.id)===String(id)); if(!g || isWishkovGoal(g)) return false;
     g.name=name; g.price=price;
     editingId=null; save(); render(); toast('цель сохранена ✓');
     return true;
@@ -315,7 +348,11 @@
     const cancel=btn && btn.getAttribute('data-cancel');
     if(up){ moveGoal(up,-1); return; }
     if(down){ moveGoal(down,1); return; }
-    if(startEdit){ editingId=startEdit; render(); return; }
+    if(startEdit){
+      const g=S.goals.find(x=>String(x.id)===String(startEdit));
+      if(!g || isWishkovGoal(g)) return;
+      editingId=startEdit; render(); return;
+    }
     if(cancel){ editingId=null; render(); return; }
     if(saveEdit){ saveGoalEdit(saveEdit); return; }
     if(buy){
@@ -328,13 +365,17 @@
       return;
     }
     if(del){
+      const g=S.goals.find(x=>String(x.id)===String(del));
+      if(!g || isWishkovGoal(g)) return;
       S.goals=S.goals.filter(x=>String(x.id)!==del); save(); render();
       return;
     }
     if(editMode && !btn){
+      if(e.target.closest('a')) return;
       const card=e.target.closest('.goal');
       const id=card && card.getAttribute('data-id');
-      if(id && !e.target.closest('input') && String(editingId)!==String(id)){
+      const g=id && S.goals.find(x=>String(x.id)===String(id));
+      if(g && !isWishkovGoal(g) && !e.target.closest('input') && String(editingId)!==String(id)){
         editingId=id; render();
       }
     }
