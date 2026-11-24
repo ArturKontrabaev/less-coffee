@@ -50,10 +50,20 @@
   .buy{ background:var(--good); color:#fff; border:none; border-radius:10px; padding:7px 14px; font-weight:700; font-size:13px; cursor:pointer; }
   .buy:disabled{ display:none; }
   .del{ background:none; border:none; color:#b7405a; font-size:12px; cursor:pointer; padding:0; }
-  .edit-row{ display:flex; gap:8px; align-items:center; margin-top:10px; }
-  .edit-row .del{ margin-left:auto; }
+  .edit-row{ display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  .edit-row .edit-start{ margin-left:auto; }
+  .edit-row .del{ margin-left:0; }
   .mv{ background:var(--card2); border:1px solid var(--line); color:var(--text); border-radius:8px; width:34px; height:30px; font-size:15px; cursor:pointer; }
   .mv:disabled{ opacity:.35; }
+  .edit-start{ background:none; border:1px solid var(--line); color:var(--muted); border-radius:8px; padding:6px 10px; font-size:13px; cursor:pointer; min-height:30px; }
+  .goal-edit{ margin-top:10px; }
+  .goal-edit .edit-fields{ display:flex; gap:8px; margin-bottom:8px; }
+  .goal-edit input{ background:var(--card2); border:1px solid var(--line); color:var(--text); border-radius:12px; padding:11px; font-size:16px; width:100%; }
+  .goal-edit input.price{ max-width:110px; }
+  .goal-edit .edit-actions{ display:flex; gap:8px; }
+  .edit-save, .edit-cancel{ flex:1; min-height:44px; border-radius:12px; padding:10px 14px; font-weight:700; font-size:15px; cursor:pointer; }
+  .edit-save{ background:var(--accent); color:#fff; border:none; }
+  .edit-cancel{ background:none; color:var(--muted); border:1px solid var(--line); }
   .add-row{ display:flex; gap:8px; margin-bottom:12px; }
   .add-row input{ background:var(--card2); border:1px solid var(--line); color:var(--text); border-radius:12px; padding:11px; font-size:15px; width:100%; }
   .add-row input.price{ max-width:110px; }
@@ -184,16 +194,37 @@
       const left = Math.max(0, g.price - S.pot);
       const el = document.createElement('div');
       el.className = 'goal' + (reached ? ' reached' : (g.id===focusId ? ' focus' : ''));
-      el.innerHTML =
+      el.setAttribute('data-id', g.id);
+      const isEditing = editMode && String(editingId)===String(g.id);
+      let html =
         '<div class="top"><span class="name">'+esc(g.name)+'</span><span class="price">'+fmt(g.price)+' ₽</span></div>'+
         '<div class="bar"><i style="width:'+pct+'%"></i></div>'+
         '<div class="meta">'+
           '<span class="pct">'+(reached?'<span class="tag">✓ можно покупать</span>':(g.id===focusId?'<span class="tag">ближайшая</span> ':'')+'осталось '+fmt(left)+' ₽ · '+pct+'%')+'</span>'+
           (reached?'<button class="buy" data-buy="'+g.id+'">Купить</button>':'')+
-        '</div>'+
-        (editMode?'<div class="edit-row"><button class="mv" data-up="'+g.id+'"'+(idx===0?' disabled':'')+'>↑</button><button class="mv" data-down="'+g.id+'"'+(idx===goals.length-1?' disabled':'')+'>↓</button><button class="del" data-del="'+g.id+'">удалить</button></div>':'');
+        '</div>';
+      if(isEditing){
+        html +=
+          '<div class="goal-edit">'+
+            '<div class="edit-fields">'+
+              '<input id="editName-'+g.id+'" value="'+esc(g.name)+'" placeholder="Название вещи" />'+
+              '<input id="editPrice-'+g.id+'" class="price" placeholder="₽" inputmode="numeric" value="'+g.price+'" />'+
+            '</div>'+
+            '<div class="edit-actions">'+
+              '<button type="button" class="edit-save" data-save="'+g.id+'">Сохранить</button>'+
+              '<button type="button" class="edit-cancel" data-cancel="'+g.id+'">Отмена</button>'+
+            '</div>'+
+          '</div>';
+      } else if(editMode){
+        html += '<div class="edit-row"><button class="mv" data-up="'+g.id+'"'+(idx===0?' disabled':'')+'>↑</button><button class="mv" data-down="'+g.id+'"'+(idx===goals.length-1?' disabled':'')+'>↓</button><button type="button" class="edit-start" data-edit="'+g.id+'">изменить</button><button class="del" data-del="'+g.id+'">удалить</button></div>';
+      }
+      el.innerHTML = html;
       box.appendChild(el);
     });
+    if(editMode && editingId){
+      const inp = $('#editName-'+editingId);
+      if(inp) inp.focus();
+    }
 
     const bb=$('#boughtBox');
     if(S.bought.length){ bb.innerHTML = '✅ Куплено: ' + S.bought.map(b=>esc(b.name)).join(' · '); }
@@ -206,6 +237,7 @@
   function moveGoal(id, dir){ const i=S.goals.findIndex(x=>String(x.id)===String(id)); if(i<0)return; const j=i+dir; if(j<0||j>=S.goals.length)return; const t=S.goals[i]; S.goals[i]=S.goals[j]; S.goals[j]=t; save(); render(); }
 
   let editMode=false;
+  let editingId=null;
 
   $('#tapBtn').addEventListener('click', ()=>{
     S.pot += S.reward; S.everSaved += S.reward; S.cups += 1;
@@ -223,7 +255,7 @@
     save(); render(); toast('отменено −'+last.amount+' ₽');
   });
 
-  $('#editBtn').addEventListener('click', ()=>{ editMode=!editMode; render(); });
+  $('#editBtn').addEventListener('click', ()=>{ editMode=!editMode; if(!editMode) editingId=null; render(); });
 
   $('#resetBtn').addEventListener('click', ()=>{
     if(!confirm('Сбросить весь прогресс? Копилка, чашки и покупки обнулятся. Цели останутся.')) return;
@@ -238,20 +270,53 @@
     $('#gName').value=''; $('#gPrice').value=''; render();
   });
 
+  function saveGoalEdit(id){
+    const nameEl=$('#editName-'+id); const priceEl=$('#editPrice-'+id);
+    const name=nameEl?nameEl.value.trim():'';
+    const price=parseInt((priceEl?priceEl.value:'').replace(/\D/g,''),10);
+    if(!name || !(price>0)){ toast('впиши название и цену больше 0'); return false; }
+    const g=S.goals.find(x=>String(x.id)===String(id)); if(!g) return false;
+    g.name=name; g.price=price;
+    editingId=null; save(); render(); toast('цель сохранена ✓');
+    return true;
+  }
+
   $('#goals').addEventListener('click', e=>{
-    const buy=e.target.getAttribute('data-buy'); const del=e.target.getAttribute('data-del');
-    const up=e.target.getAttribute('data-up'); const down=e.target.getAttribute('data-down');
+    const btn=e.target.closest('button');
+    const buy=btn && btn.getAttribute('data-buy'); const del=btn && btn.getAttribute('data-del');
+    const up=btn && btn.getAttribute('data-up'); const down=btn && btn.getAttribute('data-down');
+    const startEdit=btn && btn.getAttribute('data-edit');
+    const saveEdit=btn && btn.getAttribute('data-save');
+    const cancel=btn && btn.getAttribute('data-cancel');
     if(up){ moveGoal(up,-1); return; }
     if(down){ moveGoal(down,1); return; }
+    if(startEdit){ editingId=startEdit; render(); return; }
+    if(cancel){ editingId=null; render(); return; }
+    if(saveEdit){ saveGoalEdit(saveEdit); return; }
     if(buy){
       const g=S.goals.find(x=>String(x.id)===buy); if(!g) return;
       if(!confirm('Купить «'+g.name+'» за '+fmt(g.price)+' ₽? Спишется из копилки.')) return;
       S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now()});
       S.goals=S.goals.filter(x=>String(x.id)!==buy); S.log=[]; save(); render(); toast('🎉 куплено! наслаждайся');
+      return;
     }
     if(del){
       S.goals=S.goals.filter(x=>String(x.id)!==del); save(); render();
+      return;
     }
+    if(editMode && !btn){
+      const card=e.target.closest('.goal');
+      const id=card && card.getAttribute('data-id');
+      if(id && !e.target.closest('input') && String(editingId)!==String(id)){
+        editingId=id; render();
+      }
+    }
+  });
+
+  $('#goals').addEventListener('keydown', e=>{
+    if(!editingId) return;
+    if(e.key==='Enter'){ e.preventDefault(); saveGoalEdit(editingId); }
+    if(e.key==='Escape'){ editingId=null; render(); }
   });
   // --- бэкап (экспорт/импорт) ---
   function encodeState(){ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
