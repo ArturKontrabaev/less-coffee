@@ -89,11 +89,8 @@
   .mbtn.good{ background:var(--good); }
   .mbtn.ghost{ background:none; color:var(--muted); border:1px solid var(--line); }
 
-  .wishkov-box{ margin:16px 0 4px; padding:14px; background:var(--card); border:1px solid var(--line); border-radius:16px; }
-  .wishkov-box label{ display:block; font-size:12px; color:var(--muted); font-weight:600; margin:0 2px 8px; }
-  .wishkov-box .add-row{ margin-bottom:0; }
-  .wishkov-box .wishkov-btn{ background:var(--accent); color:#fff; border:none; border-radius:12px; padding:0 14px; font-weight:700; font-size:13px; cursor:pointer; white-space:nowrap; min-height:44px; }
-  .wishkov-box .wishkov-btn:disabled{ opacity:.55; }
+  .wishkov-status{ color:var(--muted); font-size:11px; text-align:center; margin:8px 2px 0; opacity:.75; }
+  .wishkov-status.hidden{ display:none; }
 </style>
 </head>
 <body>
@@ -125,15 +122,7 @@
   <div id="goals"></div>
 
   <div id="boughtBox" class="bought"></div>
-
-
-  <div class="wishkov-box">
-    <label for="wishkovUrl">Ссылка на вишлист wishkov</label>
-    <div class="add-row">
-      <input id="wishkovUrl" placeholder="https://wishkov.ru/w/… или код" autocapitalize="off" autocorrect="off" spellcheck="false" />
-      <button type="button" class="wishkov-btn" id="wishkovSync">Обновить из вишлиста</button>
-    </div>
-  </div>
+  <div id="wishkovStatus" class="wishkov-status hidden">вишлист не обновился</div>
 
   <div class="actions">
     <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
@@ -141,7 +130,7 @@
   </div>
 
   <div class="foot">
-    Данные хранятся только на этом устройстве. Цены в целях — примерные, поправь под свои.<br>
+    Данные хранятся только на этом устройстве. Цели из вишлиста wishkov подтягиваются сами.<br>
     Экономия +500 за чашку · дальше ужесточим до «за день без кофе».
   </div>
 
@@ -165,6 +154,8 @@
 (function(){
   const KEY = 'coffeeJar.v2';
   const WISHKOV_PROXY = 'https://wishkov-proxy.artur-kontrabaev.workers.dev';
+  const WISHKOV_SLUG = 'sydycbwq'; // список на wishkov, поменять здесь
+  const WISHKOV_SYNC_MS = 5 * 60 * 1000;
   const DEF = {
     reward: 500,
     pot: 0,
@@ -180,13 +171,20 @@
       { id:5, name:'Logitech Mobi Fold (мышь)', price:7200 }
     ],
     bought: [],
-    wishkovList: ''
+    boughtWishkovIds: []
   };
   let S = load();
-  const wishkovInput = document.getElementById('wishkovUrl');
-  if (wishkovInput) wishkovInput.value = S.wishkovList || '';
 
-  function load(){ try{ const r = JSON.parse(localStorage.getItem(KEY)); return r ? Object.assign({}, DEF, r) : structuredClone(DEF); }catch(e){ return structuredClone(DEF); } }
+  function load(){
+    try{
+      const r = JSON.parse(localStorage.getItem(KEY));
+      const state = r ? Object.assign({}, structuredClone(DEF), r) : structuredClone(DEF);
+      if(!Array.isArray(state.boughtWishkovIds)) state.boughtWishkovIds = [];
+      if(!Array.isArray(state.goals)) state.goals = [];
+      if(!Array.isArray(state.bought)) state.bought = [];
+      return state;
+    }catch(e){ return structuredClone(DEF); }
+  }
   function save(){ localStorage.setItem(KEY, JSON.stringify(S)); }
   function today(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function fmt(n){ return n.toLocaleString('ru-RU'); }
@@ -315,7 +313,9 @@
     if(buy){
       const g=S.goals.find(x=>String(x.id)===buy); if(!g) return;
       if(!confirm('Купить «'+g.name+'» за '+fmt(g.price)+' ₽? Спишется из копилки.')) return;
-      S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now()});
+      S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now(), wishkovId: wishkovIdOf(g)});
+      const wid = wishkovIdOf(g);
+      if(wid && !S.boughtWishkovIds.includes(wid)) S.boughtWishkovIds.push(wid);
       S.goals=S.goals.filter(x=>String(x.id)!==buy); S.log=[]; save(); render(); toast('🎉 куплено! наслаждайся');
       return;
     }
@@ -338,69 +338,78 @@
     if(e.key==='Escape'){ editingId=null; render(); }
   });
 
-  function parseWishkovInput(raw){
-    const s = String(raw || '').trim();
-    if(!s) return null;
-    const m = s.match(/wishkov\.ru\/w\/([a-z0-9]+)/i);
-    if(m) return m[1].toLowerCase();
-    if(/^[a-z0-9]+$/i.test(s)) return s.toLowerCase();
-    return null;
+  function wishkovIdOf(g){
+    if(g && g.wishkovId) return String(g.wishkovId);
+    const m = String(g && g.url || '').match(/\/go\/wishlist\/(\d+)\//);
+    return m ? m[1] : '';
   }
-  function wishkovErrorMessage(err, status){
-    if(status === 400) return 'Проверь ссылку: нужна вида wishkov.ru/w/… или короткий код.';
-    if(status === 404) return 'Такой вишлист не найден. Проверь ссылку и что список открыт по ссылке.';
-    if(status >= 500) return 'Вишков сейчас не отвечает, попробуй чуть позже.';
-    if(err && err.message) return err.message;
-    return 'Не удалось обновить вишлист. Проверь интернет и попробуй ещё раз.';
+  function wishkovIdFromItem(it){
+    const m = String(it && it.url || '').match(/\/go\/wishlist\/(\d+)\//);
+    return m ? m[1] : '';
   }
+  function setWishkovStatus(on){
+    const el = $('#wishkovStatus');
+    if(el) el.classList.toggle('hidden', !on);
+  }
+  let wishkovBusy = false;
   async function syncWishkov(){
-    const input = $('#wishkovUrl');
-    const btn = $('#wishkovSync');
-    const slug = parseWishkovInput(input && input.value);
-    if(!slug){ toast('Вставь ссылку wishkov.ru/w/… или короткий код'); return; }
-    if(btn){ btn.disabled = true; btn.textContent = 'Обновляю…'; }
+    if(wishkovBusy || editingId) return;
+    wishkovBusy = true;
     try{
-      const res = await fetch(WISHKOV_PROXY + '/?list=' + encodeURIComponent(slug));
+      const res = await fetch(WISHKOV_PROXY + '/?list=' + encodeURIComponent(WISHKOV_SLUG));
       let data = null;
       try{ data = await res.json(); }catch(e){ data = null; }
-      if(!res.ok){
-        toast((data && data.error) || wishkovErrorMessage(null, res.status));
-        return;
-      }
+      if(!res.ok){ setWishkovStatus(true); return; }
       const items = (data && Array.isArray(data.items)) ? data.items : [];
-      let added = 0, updated = 0, skipped = 0;
-      for(const it of items){
+      const bought = new Set((S.boughtWishkovIds || []).map(String));
+      const seen = new Set();
+      let changed = false;
+      items.forEach((it, i) => {
         const title = it && typeof it.title === 'string' ? it.title.trim() : '';
         const price = Number(it && it.price);
         const url = it && typeof it.url === 'string' ? it.url.trim() : '';
-        if(!title || !url || !(price > 0)){ skipped++; continue; }
-        const existing = S.goals.find(g => g.url === url);
+        const wid = wishkovIdFromItem(it);
+        if(!title || !url || !wid || !(price > 0)) return;
+        if(bought.has(wid)) return;
+        seen.add(wid);
+        const existing = S.goals.find(g => wishkovIdOf(g) === wid);
         if(existing){
-          if(existing.price !== price){ existing.price = price; updated++; }
-          continue;
+          if(existing.name !== title){ existing.name = title; changed = true; }
+          if(existing.price !== price){ existing.price = price; changed = true; }
+          if(existing.url !== url){ existing.url = url; changed = true; }
+          if(existing.wishkovId !== wid){ existing.wishkovId = wid; changed = true; }
+          return;
         }
-        S.goals.push({ id: Date.now() + added, name: title, price, url });
-        added++;
-      }
-      S.wishkovList = 'https://wishkov.ru/w/' + slug + '/';
-      if(input) input.value = S.wishkovList;
-      save(); render();
-      const parts = [];
-      if(added) parts.push('добавлено ' + added);
-      if(updated) parts.push('обновлено цен ' + updated);
-      if(!added && !updated) parts.push(items.length ? 'уже актуально' : 'в списке пока нет товаров');
-      if(skipped) parts.push('без цены пропущено ' + skipped);
-      toast(parts.join(', '));
+        S.goals.push({ id: Date.now() + i, name: title, price, url, wishkovId: wid });
+        changed = true;
+      });
+      const next = S.goals.filter(g => {
+        const wid = wishkovIdOf(g);
+        if(!wid) return true;
+        if(bought.has(wid)) return false;
+        if(seen.has(wid)) return true;
+        // Пропал из wishkov. Копилка общая: деньги не привязаны к цели, пока не нажали «Купить»,
+        // поэтому импортированную цель убираем, pot не трогаем.
+        changed = true;
+        return false;
+      });
+      if(next.length !== S.goals.length) S.goals = next;
+      setWishkovStatus(false);
+      if(changed){ save(); render(); }
     }catch(e){
-      toast(wishkovErrorMessage(e));
+      setWishkovStatus(true);
     }finally{
-      if(btn){ btn.disabled = false; btn.textContent = 'Обновить из вишлиста'; }
+      wishkovBusy = false;
     }
   }
-  $('#wishkovSync').addEventListener('click', syncWishkov);
-  $('#wishkovUrl').addEventListener('keydown', e=>{
-    if(e.key === 'Enter'){ e.preventDefault(); syncWishkov(); }
-  });
+  function onWishkovWake(){
+    if(document.visibilityState === 'hidden') return;
+    syncWishkov();
+  }
+  document.addEventListener('visibilitychange', onWishkovWake);
+  window.addEventListener('focus', onWishkovWake);
+  window.addEventListener('pageshow', onWishkovWake);
+  setInterval(onWishkovWake, WISHKOV_SYNC_MS);
 
   // --- бэкап (экспорт/импорт) ---
 
@@ -420,9 +429,13 @@
     let data; try{ data=decodeState(raw); }catch(e){ toast('код не читается — проверь'); return; }
     if(!data || typeof data!=='object' || !('pot' in data) || !Array.isArray(data.goals)){ toast('это не похоже на код копилки'); return; }
     if(!confirm('Восстановить копилку из кода? Текущие данные на этом устройстве заменятся.')) return;
-    S = Object.assign({}, DEF, data); save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
+    S = Object.assign({}, structuredClone(DEF), data);
+    if(!Array.isArray(S.boughtWishkovIds)) S.boughtWishkovIds = [];
+    save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
+    syncWishkov();
   });
   render();
+  syncWishkov();
 })();
 </script>
 </body>
