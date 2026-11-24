@@ -40,6 +40,7 @@
   .goal .top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
   .goal .name{ font-weight:700; font-size:15px; line-height:1.35; }
   .goal .price{ color:var(--muted); font-size:13px; white-space:nowrap; }
+  .goal .price.noprice{ font-weight:600; }
   .goal .src{ display:inline-block; margin-left:6px; font-size:10px; font-weight:700; letter-spacing:.2px; line-height:1.2; color:var(--muted); background:var(--card2); border:1px solid var(--line); border-radius:999px; padding:2px 7px; vertical-align:middle; text-decoration:none; position:relative; top:-1px; }
   .goal .src.wishkov{ color:var(--accent); background:color-mix(in srgb,var(--accent) 10%, var(--card)); border-color:color-mix(in srgb,var(--accent) 22%, var(--line)); }
   .wishkov-hint{ margin-left:auto; font-size:11px; color:var(--muted); }
@@ -81,16 +82,6 @@
   #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
   .actions{ display:flex; gap:16px; justify-content:center; margin-top:14px; }
   .actions .reset{ margin:0; }
-  .modal{ position:fixed; inset:0; background:rgba(20,18,40,.55); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); display:flex; align-items:flex-end; justify-content:center; z-index:20; }
-  .modal.hidden{ display:none; }
-  .sheet{ background:var(--bg); width:100%; max-width:520px; border-radius:22px 22px 0 0; padding:20px 18px calc(24px + env(safe-area-inset-bottom)); box-shadow:0 -8px 30px rgba(0,0,0,.25); }
-  .sheet h3{ margin:2px 0 6px; font-size:17px; }
-  .sheet .mp{ color:var(--muted); font-size:13px; margin:0 0 8px; line-height:1.45; }
-  .sheet label{ display:block; font-size:12px; color:var(--muted); margin:12px 2px 5px; font-weight:600; }
-  .sheet textarea{ width:100%; height:64px; resize:none; background:var(--card2); border:1px solid var(--line); border-radius:12px; padding:10px; font-size:12px; color:var(--text); font-family:ui-monospace,Menlo,monospace; }
-  .mbtn{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; font-weight:700; margin-top:8px; cursor:pointer; background:var(--accent); color:#fff; }
-  .mbtn.good{ background:var(--good); }
-  .mbtn.ghost{ background:none; color:var(--muted); border:1px solid var(--line); }
 
   .wishkov-status{ color:var(--muted); font-size:11px; text-align:center; margin:8px 2px 0; opacity:.75; }
   .wishkov-status.hidden{ display:none; }
@@ -129,27 +120,12 @@
   <div id="storageStatus" class="wishkov-status hidden">не удалось прочитать копилку — данные на устройстве не трогаем</div>
 
   <div class="actions">
-    <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
     <button class="reset" id="resetBtn">↺ Сбросить прогресс</button>
   </div>
 
   <div class="foot">
     Данные хранятся только на этом устройстве. Цели из вишлиста wishkov подтягиваются сами.<br>
     Экономия +500 за чашку · дальше ужесточим до «за день без кофе».
-  </div>
-
-  <div id="backupModal" class="modal hidden">
-    <div class="sheet">
-      <h3>💾 Бэкап копилки</h3>
-      <p class="mp">Скопируй код и сохрани себе (в Заметки или отправь в Telegram). Чтобы восстановить на новом телефоне или после чистки кэша — вставь код ниже и нажми «Восстановить».</p>
-      <label>Код копилки (экспорт)</label>
-      <textarea id="expCode" readonly onclick="this.select()"></textarea>
-      <button class="mbtn" id="copyCode">📋 Скопировать код</button>
-      <label>Восстановить из кода (импорт)</label>
-      <textarea id="impCode" placeholder="Вставь сюда код бэкапа"></textarea>
-      <button class="mbtn good" id="doImport">↺ Восстановить</button>
-      <button class="mbtn ghost" id="closeBackup">Закрыть</button>
-    </div>
   </div>
 
   <div id="toast"></div>
@@ -232,13 +208,17 @@
 
     const goals = S.goals;
     let focusId = null, minPrice = Infinity;
-    for(const g of goals){ if(S.pot < g.price && g.price < minPrice){ minPrice = g.price; focusId = g.id; } }
+    for(const g of goals){
+      if(!(g.price > 0)) continue;
+      if(S.pot < g.price && g.price < minPrice){ minPrice = g.price; focusId = g.id; }
+    }
 
     const box = $('#goals'); box.innerHTML='';
     goals.forEach((g,idx)=>{
-      const reached = S.pot >= g.price;
-      const pct = Math.min(100, Math.round(S.pot / g.price * 100));
-      const left = Math.max(0, g.price - S.pot);
+      const hasPrice = g.price > 0;
+      const reached = hasPrice && S.pot >= g.price;
+      const pct = hasPrice ? Math.min(100, Math.round(S.pot / g.price * 100)) : 0;
+      const left = hasPrice ? Math.max(0, g.price - S.pot) : 0;
       const el = document.createElement('div');
       el.className = 'goal' + (reached ? ' reached' : (g.id===focusId ? ' focus' : ''));
       el.setAttribute('data-id', g.id);
@@ -249,13 +229,20 @@
             ? '<a class="src wishkov" href="'+esc(g.url)+'" target="_blank" rel="noopener noreferrer">wishkov</a>'
             : '<span class="src wishkov">wishkov</span>')
         : '<span class="src own">своё</span>';
-      let html =
-        '<div class="top"><span class="name">'+esc(g.name)+' '+badge+'</span><span class="price">'+fmt(g.price)+' ₽</span></div>'+
-        '<div class="bar"><i style="width:'+pct+'%"></i></div>'+
-        '<div class="meta">'+
-          '<span class="pct">'+(reached?'<span class="tag">✓ можно покупать</span>':(g.id===focusId?'<span class="tag">ближайшая</span> ':'')+'осталось '+fmt(left)+' ₽ · '+pct+'%')+'</span>'+
-          (reached?'<button class="buy" data-buy="'+g.id+'">Купить</button>':'')+
-        '</div>';
+      let html;
+      if(!hasPrice){
+        html =
+          '<div class="top"><span class="name">'+esc(g.name)+' '+badge+'</span><span class="price noprice">цена не указана</span></div>'+
+          '<div class="meta"><span class="pct">укажи цену в wishkov</span></div>';
+      } else {
+        html =
+          '<div class="top"><span class="name">'+esc(g.name)+' '+badge+'</span><span class="price">'+fmt(g.price)+' ₽</span></div>'+
+          '<div class="bar"><i style="width:'+pct+'%"></i></div>'+
+          '<div class="meta">'+
+            '<span class="pct">'+(reached?'<span class="tag">✓ можно покупать</span>':(g.id===focusId?'<span class="tag">ближайшая</span> ':'')+'осталось '+fmt(left)+' ₽ · '+pct+'%')+'</span>'+
+            (reached?'<button class="buy" data-buy="'+g.id+'">Купить</button>':'')+
+          '</div>';
+      }
       if(isEditing){
         html +=
           '<div class="goal-edit">'+
@@ -356,7 +343,7 @@
     if(cancel){ editingId=null; render(); return; }
     if(saveEdit){ saveGoalEdit(saveEdit); return; }
     if(buy){
-      const g=S.goals.find(x=>String(x.id)===buy); if(!g) return;
+      const g=S.goals.find(x=>String(x.id)===buy); if(!g || !(g.price > 0)) return;
       if(!confirm('Купить «'+g.name+'» за '+fmt(g.price)+' ₽? Спишется из копилки.')) return;
       S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now(), wishkovId: wishkovIdOf(g)});
       const wid = wishkovIdOf(g);
@@ -417,10 +404,11 @@
       let changed = false;
       items.forEach((it, i) => {
         const title = it && typeof it.title === 'string' ? it.title.trim() : '';
-        const price = Number(it && it.price);
+        const priceNum = Number(it && it.price);
+        const price = priceNum > 0 ? priceNum : 0;
         const url = it && typeof it.url === 'string' ? it.url.trim() : '';
         const wid = wishkovIdFromItem(it);
-        if(!title || !url || !wid || !(price > 0)) return;
+        if(!title || !url || !wid) return;
         if(bought.has(wid)) return;
         seen.add(wid);
         const existing = S.goals.find(g => wishkovIdOf(g) === wid);
@@ -465,32 +453,6 @@
     syncWishkov();
   }, WISHKOV_SYNC_MS);
 
-  // --- бэкап (экспорт/импорт) ---
-
-  function encodeState(){ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
-  function decodeState(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
-  $('#backupBtn').addEventListener('click', ()=>{ $('#expCode').value = encodeState(); $('#impCode').value=''; $('#backupModal').classList.remove('hidden'); });
-  $('#closeBackup').addEventListener('click', ()=> $('#backupModal').classList.add('hidden'));
-  $('#backupModal').addEventListener('click', e=>{ if(e.target.id==='backupModal') $('#backupModal').classList.add('hidden'); });
-  $('#copyCode').addEventListener('click', ()=>{
-    const code=$('#expCode').value;
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(code).then(()=>toast('код скопирован ✓')).catch(()=>{ $('#expCode').select(); toast('код выделен — скопируй'); });
-    } else { $('#expCode').select(); try{ document.execCommand('copy'); toast('код скопирован ✓'); }catch(e){ toast('выдели и скопируй вручную'); } }
-  });
-  $('#doImport').addEventListener('click', ()=>{
-    const raw=$('#impCode').value.trim(); if(!raw){ toast('вставь код'); return; }
-    let data; try{ data=decodeState(raw); }catch(e){ toast('код не читается — проверь'); return; }
-    if(!data || typeof data!=='object' || !('pot' in data) || !Array.isArray(data.goals)){ toast('это не похоже на код копилки'); return; }
-    if(!confirm('Восстановить копилку из кода? Текущие данные на этом устройстве заменятся.')) return;
-    S = Object.assign({}, structuredClone(DEF), data);
-    if(!Array.isArray(S.boughtWishkovIds)) S.boughtWishkovIds = [];
-    if(!Array.isArray(S.goals)) S.goals = [];
-    if(!Array.isArray(S.bought)) S.bought = [];
-    migrateWishkovOnly(S);
-    save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
-    syncWishkov({ fresh: true });
-  });
   render();
   syncWishkov({ fresh: true });
 })();
