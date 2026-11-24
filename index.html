@@ -88,6 +88,9 @@
   .mbtn{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; font-weight:700; margin-top:8px; cursor:pointer; background:var(--accent); color:#fff; }
   .mbtn.good{ background:var(--good); }
   .mbtn.ghost{ background:none; color:var(--muted); border:1px solid var(--line); }
+
+  .wishkov-status{ color:var(--muted); font-size:11px; text-align:center; margin:8px 2px 0; opacity:.75; }
+  .wishkov-status.hidden{ display:none; }
 </style>
 </head>
 <body>
@@ -119,6 +122,7 @@
   <div id="goals"></div>
 
   <div id="boughtBox" class="bought"></div>
+  <div id="wishkovStatus" class="wishkov-status hidden">вишлист не обновился</div>
 
   <div class="actions">
     <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
@@ -126,7 +130,7 @@
   </div>
 
   <div class="foot">
-    Данные хранятся только на этом устройстве. Цены в целях — примерные, поправь под свои.<br>
+    Данные хранятся только на этом устройстве. Цели из вишлиста wishkov подтягиваются сами.<br>
     Экономия +500 за чашку · дальше ужесточим до «за день без кофе».
   </div>
 
@@ -149,6 +153,9 @@
 <script>
 (function(){
   const KEY = 'coffeeJar.v2';
+  const WISHKOV_PROXY = 'https://wishkov-proxy.artur-kontrabaev.workers.dev';
+  const WISHKOV_SLUG = 'sydycbwq'; // список на wishkov, поменять здесь
+  const WISHKOV_SYNC_MS = 5 * 60 * 1000;
   const DEF = {
     reward: 500,
     pot: 0,
@@ -156,18 +163,36 @@
     cups: 0,
     days: {},
     log: [],
-    goals: [
-      { id:1, name:'Sky Team «Крутое пике»', price:1700 },
-      { id:2, name:'Baseus зарядка 67W (EnerCore CJ11)', price:3000 },
-      { id:3, name:'Anker повербанк 5000мАч (A1665)', price:4000 },
-      { id:4, name:'Logitech Keys to Go 2', price:7000 },
-      { id:5, name:'Logitech Mobi Fold (мышь)', price:7200 }
-    ],
-    bought: []
+    goals: [],
+    bought: [],
+    boughtWishkovIds: [],
+    migratedWishkovOnly: false
   };
   let S = load();
 
-  function load(){ try{ const r = JSON.parse(localStorage.getItem(KEY)); return r ? Object.assign({}, DEF, r) : structuredClone(DEF); }catch(e){ return structuredClone(DEF); } }
+  function isWishkovGoal(g){
+    if(g && g.wishkovId) return true;
+    return /\/go\/wishlist\/\d+\//.test(String(g && g.url || ''));
+  }
+  function migrateWishkovOnly(state){
+    if(state.migratedWishkovOnly) return false;
+    state.goals = (state.goals || []).filter(isWishkovGoal);
+    state.migratedWishkovOnly = true;
+    return true;
+  }
+  function load(){
+    try{
+      const r = JSON.parse(localStorage.getItem(KEY));
+      const state = r ? Object.assign({}, structuredClone(DEF), r) : structuredClone(DEF);
+      if(!Array.isArray(state.boughtWishkovIds)) state.boughtWishkovIds = [];
+      if(!Array.isArray(state.goals)) state.goals = [];
+      if(!Array.isArray(state.bought)) state.bought = [];
+      const migrated = migrateWishkovOnly(state);
+      // pot, bought, log, cups не трогаем — только цели без wishkov-id, и только один раз
+      if(r && migrated) localStorage.setItem(KEY, JSON.stringify(state));
+      return state;
+    }catch(e){ return structuredClone(DEF); }
+  }
   function save(){ localStorage.setItem(KEY, JSON.stringify(S)); }
   function today(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function fmt(n){ return n.toLocaleString('ru-RU'); }
@@ -296,7 +321,9 @@
     if(buy){
       const g=S.goals.find(x=>String(x.id)===buy); if(!g) return;
       if(!confirm('Купить «'+g.name+'» за '+fmt(g.price)+' ₽? Спишется из копилки.')) return;
-      S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now()});
+      S.pot-=g.price; S.bought.unshift({name:g.name, price:g.price, t:Date.now(), wishkovId: wishkovIdOf(g)});
+      const wid = wishkovIdOf(g);
+      if(wid && !S.boughtWishkovIds.includes(wid)) S.boughtWishkovIds.push(wid);
       S.goals=S.goals.filter(x=>String(x.id)!==buy); S.log=[]; save(); render(); toast('🎉 куплено! наслаждайся');
       return;
     }
@@ -318,7 +345,82 @@
     if(e.key==='Enter'){ e.preventDefault(); saveGoalEdit(editingId); }
     if(e.key==='Escape'){ editingId=null; render(); }
   });
+
+  function wishkovIdOf(g){
+    if(g && g.wishkovId) return String(g.wishkovId);
+    const m = String(g && g.url || '').match(/\/go\/wishlist\/(\d+)\//);
+    return m ? m[1] : '';
+  }
+  function wishkovIdFromItem(it){
+    const m = String(it && it.url || '').match(/\/go\/wishlist\/(\d+)\//);
+    return m ? m[1] : '';
+  }
+  function setWishkovStatus(on){
+    const el = $('#wishkovStatus');
+    if(el) el.classList.toggle('hidden', !on);
+  }
+  let wishkovBusy = false;
+  async function syncWishkov(){
+    if(wishkovBusy || editingId) return;
+    wishkovBusy = true;
+    try{
+      const res = await fetch(WISHKOV_PROXY + '/?list=' + encodeURIComponent(WISHKOV_SLUG));
+      let data = null;
+      try{ data = await res.json(); }catch(e){ data = null; }
+      if(!res.ok){ setWishkovStatus(true); return; }
+      const items = (data && Array.isArray(data.items)) ? data.items : [];
+      const bought = new Set((S.boughtWishkovIds || []).map(String));
+      const seen = new Set();
+      let changed = false;
+      items.forEach((it, i) => {
+        const title = it && typeof it.title === 'string' ? it.title.trim() : '';
+        const price = Number(it && it.price);
+        const url = it && typeof it.url === 'string' ? it.url.trim() : '';
+        const wid = wishkovIdFromItem(it);
+        if(!title || !url || !wid || !(price > 0)) return;
+        if(bought.has(wid)) return;
+        seen.add(wid);
+        const existing = S.goals.find(g => wishkovIdOf(g) === wid);
+        if(existing){
+          if(existing.name !== title){ existing.name = title; changed = true; }
+          if(existing.price !== price){ existing.price = price; changed = true; }
+          if(existing.url !== url){ existing.url = url; changed = true; }
+          if(existing.wishkovId !== wid){ existing.wishkovId = wid; changed = true; }
+          return;
+        }
+        S.goals.push({ id: Date.now() + i, name: title, price, url, wishkovId: wid });
+        changed = true;
+      });
+      const next = S.goals.filter(g => {
+        const wid = wishkovIdOf(g);
+        if(!wid) return true;
+        if(bought.has(wid)) return false;
+        if(seen.has(wid)) return true;
+        // Пропал из wishkov. Копилка общая: деньги не привязаны к цели, пока не нажали «Купить»,
+        // поэтому импортированную цель убираем, pot не трогаем.
+        changed = true;
+        return false;
+      });
+      if(next.length !== S.goals.length) S.goals = next;
+      setWishkovStatus(false);
+      if(changed){ save(); render(); }
+    }catch(e){
+      setWishkovStatus(true);
+    }finally{
+      wishkovBusy = false;
+    }
+  }
+  function onWishkovWake(){
+    if(document.visibilityState === 'hidden') return;
+    syncWishkov();
+  }
+  document.addEventListener('visibilitychange', onWishkovWake);
+  window.addEventListener('focus', onWishkovWake);
+  window.addEventListener('pageshow', onWishkovWake);
+  setInterval(onWishkovWake, WISHKOV_SYNC_MS);
+
   // --- бэкап (экспорт/импорт) ---
+
   function encodeState(){ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
   function decodeState(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
   $('#backupBtn').addEventListener('click', ()=>{ $('#expCode').value = encodeState(); $('#impCode').value=''; $('#backupModal').classList.remove('hidden'); });
@@ -335,9 +437,16 @@
     let data; try{ data=decodeState(raw); }catch(e){ toast('код не читается — проверь'); return; }
     if(!data || typeof data!=='object' || !('pot' in data) || !Array.isArray(data.goals)){ toast('это не похоже на код копилки'); return; }
     if(!confirm('Восстановить копилку из кода? Текущие данные на этом устройстве заменятся.')) return;
-    S = Object.assign({}, DEF, data); save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
+    S = Object.assign({}, structuredClone(DEF), data);
+    if(!Array.isArray(S.boughtWishkovIds)) S.boughtWishkovIds = [];
+    if(!Array.isArray(S.goals)) S.goals = [];
+    if(!Array.isArray(S.bought)) S.bought = [];
+    migrateWishkovOnly(S);
+    save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
+    syncWishkov();
   });
   render();
+  syncWishkov();
 })();
 </script>
 </body>
