@@ -163,18 +163,23 @@
     cups: 0,
     days: {},
     log: [],
-    goals: [
-      { id:1, name:'Sky Team «Крутое пике»', price:1700 },
-      { id:2, name:'Baseus зарядка 67W (EnerCore CJ11)', price:3000 },
-      { id:3, name:'Anker повербанк 5000мАч (A1665)', price:4000 },
-      { id:4, name:'Logitech Keys to Go 2', price:7000 },
-      { id:5, name:'Logitech Mobi Fold (мышь)', price:7200 }
-    ],
+    goals: [],
     bought: [],
-    boughtWishkovIds: []
+    boughtWishkovIds: [],
+    migratedWishkovOnly: false
   };
   let S = load();
 
+  function isWishkovGoal(g){
+    if(g && g.wishkovId) return true;
+    return /\/go\/wishlist\/\d+\//.test(String(g && g.url || ''));
+  }
+  function migrateWishkovOnly(state){
+    if(state.migratedWishkovOnly) return false;
+    state.goals = (state.goals || []).filter(isWishkovGoal);
+    state.migratedWishkovOnly = true;
+    return true;
+  }
   function load(){
     try{
       const r = JSON.parse(localStorage.getItem(KEY));
@@ -182,6 +187,9 @@
       if(!Array.isArray(state.boughtWishkovIds)) state.boughtWishkovIds = [];
       if(!Array.isArray(state.goals)) state.goals = [];
       if(!Array.isArray(state.bought)) state.bought = [];
+      const migrated = migrateWishkovOnly(state);
+      // pot, bought, log, cups не трогаем — только цели без wishkov-id, и только один раз
+      if(r && migrated) localStorage.setItem(KEY, JSON.stringify(state));
       return state;
     }catch(e){ return structuredClone(DEF); }
   }
@@ -431,6 +439,9 @@
     if(!confirm('Восстановить копилку из кода? Текущие данные на этом устройстве заменятся.')) return;
     S = Object.assign({}, structuredClone(DEF), data);
     if(!Array.isArray(S.boughtWishkovIds)) S.boughtWishkovIds = [];
+    if(!Array.isArray(S.goals)) S.goals = [];
+    if(!Array.isArray(S.bought)) S.bought = [];
+    migrateWishkovOnly(S);
     save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
     syncWishkov();
   });
