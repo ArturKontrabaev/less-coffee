@@ -401,11 +401,13 @@
     if(el) el.classList.toggle('hidden', !on);
   }
   let wishkovBusy = false;
-  async function syncWishkov(){
+  async function syncWishkov(opts){
     if(wishkovBusy || editingId) return;
     wishkovBusy = true;
+    const fresh = !!(opts && opts.fresh);
     try{
-      const res = await fetch(WISHKOV_PROXY + '/?list=' + encodeURIComponent(WISHKOV_SLUG));
+      const url = WISHKOV_PROXY + '/?list=' + encodeURIComponent(WISHKOV_SLUG) + (fresh ? '&fresh=1' : '');
+      const res = await fetch(url, fresh ? { cache: 'no-store' } : undefined);
       let data = null;
       try{ data = await res.json(); }catch(e){ data = null; }
       if(!res.ok){ setWishkovStatus(true); return; }
@@ -453,12 +455,15 @@
   }
   function onWishkovWake(){
     if(document.visibilityState === 'hidden') return;
-    syncWishkov();
+    syncWishkov({ fresh: true });
   }
   document.addEventListener('visibilitychange', onWishkovWake);
   window.addEventListener('focus', onWishkovWake);
   window.addEventListener('pageshow', onWishkovWake);
-  setInterval(onWishkovWake, WISHKOV_SYNC_MS);
+  setInterval(() => {
+    if(document.visibilityState === 'hidden') return;
+    syncWishkov();
+  }, WISHKOV_SYNC_MS);
 
   // --- бэкап (экспорт/импорт) ---
 
@@ -484,10 +489,10 @@
     if(!Array.isArray(S.bought)) S.bought = [];
     migrateWishkovOnly(S);
     save(); render(); $('#backupModal').classList.add('hidden'); toast('восстановлено ✓');
-    syncWishkov();
+    syncWishkov({ fresh: true });
   });
   render();
-  syncWishkov();
+  syncWishkov({ fresh: true });
 })();
 </script>
 </body>
