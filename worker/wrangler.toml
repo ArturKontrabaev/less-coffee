@@ -1,0 +1,5 @@
+name = "wishkov-proxy"
+main = "index.js"
+compatibility_date = "2026-11-24"
+account_id = "958812142d545adc2b74d8629b2eb379"
+workers_dev = true

@@ -88,6 +88,12 @@
   .mbtn{ width:100%; border:none; border-radius:12px; padding:12px; font-size:15px; font-weight:700; margin-top:8px; cursor:pointer; background:var(--accent); color:#fff; }
   .mbtn.good{ background:var(--good); }
   .mbtn.ghost{ background:none; color:var(--muted); border:1px solid var(--line); }
+
+  .wishkov-box{ margin:16px 0 4px; padding:14px; background:var(--card); border:1px solid var(--line); border-radius:16px; }
+  .wishkov-box label{ display:block; font-size:12px; color:var(--muted); font-weight:600; margin:0 2px 8px; }
+  .wishkov-box .add-row{ margin-bottom:0; }
+  .wishkov-box .wishkov-btn{ background:var(--accent); color:#fff; border:none; border-radius:12px; padding:0 14px; font-weight:700; font-size:13px; cursor:pointer; white-space:nowrap; min-height:44px; }
+  .wishkov-box .wishkov-btn:disabled{ opacity:.55; }
 </style>
 </head>
 <body>
@@ -120,6 +126,15 @@
 
   <div id="boughtBox" class="bought"></div>
 
+
+  <div class="wishkov-box">
+    <label for="wishkovUrl">Ссылка на вишлист wishkov</label>
+    <div class="add-row">
+      <input id="wishkovUrl" placeholder="https://wishkov.ru/w/… или код" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <button type="button" class="wishkov-btn" id="wishkovSync">Обновить из вишлиста</button>
+    </div>
+  </div>
+
   <div class="actions">
     <button class="reset" id="backupBtn">💾 Бэкап / восстановить</button>
     <button class="reset" id="resetBtn">↺ Сбросить прогресс</button>
@@ -149,6 +164,7 @@
 <script>
 (function(){
   const KEY = 'coffeeJar.v2';
+  const WISHKOV_PROXY = 'https://wishkov-proxy.artur-kontrabaev.workers.dev';
   const DEF = {
     reward: 500,
     pot: 0,
@@ -163,9 +179,12 @@
       { id:4, name:'Logitech Keys to Go 2', price:7000 },
       { id:5, name:'Logitech Mobi Fold (мышь)', price:7200 }
     ],
-    bought: []
+    bought: [],
+    wishkovList: ''
   };
   let S = load();
+  const wishkovInput = document.getElementById('wishkovUrl');
+  if (wishkovInput) wishkovInput.value = S.wishkovList || '';
 
   function load(){ try{ const r = JSON.parse(localStorage.getItem(KEY)); return r ? Object.assign({}, DEF, r) : structuredClone(DEF); }catch(e){ return structuredClone(DEF); } }
   function save(){ localStorage.setItem(KEY, JSON.stringify(S)); }
@@ -318,7 +337,73 @@
     if(e.key==='Enter'){ e.preventDefault(); saveGoalEdit(editingId); }
     if(e.key==='Escape'){ editingId=null; render(); }
   });
+
+  function parseWishkovInput(raw){
+    const s = String(raw || '').trim();
+    if(!s) return null;
+    const m = s.match(/wishkov\.ru\/w\/([a-z0-9]+)/i);
+    if(m) return m[1].toLowerCase();
+    if(/^[a-z0-9]+$/i.test(s)) return s.toLowerCase();
+    return null;
+  }
+  function wishkovErrorMessage(err, status){
+    if(status === 400) return 'Проверь ссылку: нужна вида wishkov.ru/w/… или короткий код.';
+    if(status === 404) return 'Такой вишлист не найден. Проверь ссылку и что список открыт по ссылке.';
+    if(status >= 500) return 'Вишков сейчас не отвечает, попробуй чуть позже.';
+    if(err && err.message) return err.message;
+    return 'Не удалось обновить вишлист. Проверь интернет и попробуй ещё раз.';
+  }
+  async function syncWishkov(){
+    const input = $('#wishkovUrl');
+    const btn = $('#wishkovSync');
+    const slug = parseWishkovInput(input && input.value);
+    if(!slug){ toast('Вставь ссылку wishkov.ru/w/… или короткий код'); return; }
+    if(btn){ btn.disabled = true; btn.textContent = 'Обновляю…'; }
+    try{
+      const res = await fetch(WISHKOV_PROXY + '/?list=' + encodeURIComponent(slug));
+      let data = null;
+      try{ data = await res.json(); }catch(e){ data = null; }
+      if(!res.ok){
+        toast((data && data.error) || wishkovErrorMessage(null, res.status));
+        return;
+      }
+      const items = (data && Array.isArray(data.items)) ? data.items : [];
+      let added = 0, updated = 0, skipped = 0;
+      for(const it of items){
+        const title = it && typeof it.title === 'string' ? it.title.trim() : '';
+        const price = Number(it && it.price);
+        const url = it && typeof it.url === 'string' ? it.url.trim() : '';
+        if(!title || !url || !(price > 0)){ skipped++; continue; }
+        const existing = S.goals.find(g => g.url === url);
+        if(existing){
+          if(existing.price !== price){ existing.price = price; updated++; }
+          continue;
+        }
+        S.goals.push({ id: Date.now() + added, name: title, price, url });
+        added++;
+      }
+      S.wishkovList = 'https://wishkov.ru/w/' + slug + '/';
+      if(input) input.value = S.wishkovList;
+      save(); render();
+      const parts = [];
+      if(added) parts.push('добавлено ' + added);
+      if(updated) parts.push('обновлено цен ' + updated);
+      if(!added && !updated) parts.push(items.length ? 'уже актуально' : 'в списке пока нет товаров');
+      if(skipped) parts.push('без цены пропущено ' + skipped);
+      toast(parts.join(', '));
+    }catch(e){
+      toast(wishkovErrorMessage(e));
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = 'Обновить из вишлиста'; }
+    }
+  }
+  $('#wishkovSync').addEventListener('click', syncWishkov);
+  $('#wishkovUrl').addEventListener('keydown', e=>{
+    if(e.key === 'Enter'){ e.preventDefault(); syncWishkov(); }
+  });
+
   // --- бэкап (экспорт/импорт) ---
+
   function encodeState(){ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
   function decodeState(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
   $('#backupBtn').addEventListener('click', ()=>{ $('#expCode').value = encodeState(); $('#impCode').value=''; $('#backupModal').classList.remove('hidden'); });
