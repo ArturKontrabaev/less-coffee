@@ -1,6 +1,8 @@
 /**
  * wishkov-proxy — read-only proxy for public Wishkov wishlists.
  * GET /?list=<slug>  slug: [a-z0-9]+
+ * Optional &fresh=1 — skip Cloudflare/browser cache, fetch wishkov.ru now,
+ * then store the result in the 5-minute cache for later non-fresh requests.
  * Fetches only https://wishkov.ru/w/<slug>/ and returns parsed items.
  * Not an open proxy: the client cannot pass an arbitrary URL.
  */
@@ -16,7 +18,7 @@ const CORS = {
 };
 
 export default {
-  async fetch(request) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
@@ -33,6 +35,8 @@ export default {
     if (!LIST_RE.test(slug)) {
       return json({ error: 'Укажи код вишлиста: только латинские буквы и цифры, или ссылку вида wishkov.ru/w/…' }, 400);
     }
+
+    const fresh = String(reqUrl.searchParams.get('fresh') || '') === '1';
 
     const src = 'https://wishkov.ru/w/' + slug + '/';
     let res;
@@ -72,7 +76,20 @@ export default {
     }
 
     const items = parseWishlist(html);
-    return json({ items }, 200, { 'Cache-Control': 'public, max-age=' + CACHE_TTL });
+    const cacheHeaders = { 'Cache-Control': 'public, max-age=' + CACHE_TTL };
+    const cached = json({ items }, 200, cacheHeaders);
+    const canon = new URL(request.url);
+    canon.search = '';
+    canon.searchParams.set('list', slug);
+    const cacheKey = new Request(canon.toString(), { method: 'GET' });
+    const put = caches.default.put(cacheKey, cached.clone());
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(put);
+    else await put;
+
+    if (fresh) {
+      return json({ items }, 200, { 'Cache-Control': 'no-store' });
+    }
+    return cached;
   },
 };
 
